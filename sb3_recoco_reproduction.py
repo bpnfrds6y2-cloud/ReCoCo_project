@@ -61,8 +61,22 @@ stable-baselines3ベースの学習スクリプト。GPU機(このMacではな�
 GPU使用: --device cuda を指定(未指定時は自動判定 = "auto"、CUDAが
 使えればGPUを使う)。ネットワークが小さいため速度向上は限定的だが、
 指定しても害はない。
+
+== 結果の確認方法(2通り) ==
+
+1. 学習中の途中経過(tensorboard): デフォルトで ./tb_logs/ にログを書く。
+   別ターミナルで
+       tensorboard --logdir ./tb_logs --host 0.0.0.0
+   を実行し、http://<GPU機のIP>:6006 にブラウザでアクセスすると
+   reward等の学習曲線をリアルタイムで見られる(--tensorboard-log '' で無効化可)。
+
+2. 学習後の評価結果(数値): 学習完了後、自動的に対象trace(pertraceなら
+   そのtrace、globalなら9trace全部)で決定論的に評価を行い、
+   <output>_eval.csv に mean_reward / mean_bandwidth_util / mean_delay_ms /
+   mean_loss_ratio を保存する(--eval-episodes 0 でスキップ可)。
 """
 import argparse
+import csv
 import os
 
 import numpy as np
@@ -177,6 +191,73 @@ def build_env(mode, trace, trace_set):
         raise ValueError(f"unknown mode: {mode}")
 
 
+def evaluate_on_trace(model, trace_path, n_episodes=3):
+    """学習済みモデルを指定traceで決定論的に走らせ、reward・帯域利用率・遅延・
+    ロス率の平均値を計算する(_plot_pretrain_timeseries等、他のスクリプトが
+    使っている window_mean_* と同じ指標)。「精度の結果」を数値で見るための
+    評価関数。
+    """
+    env = OriginalRewardGymEnv(
+        step_time=200, input_trace=trace_path, random_trace=False,
+        normalize_states=True, delay_states=True,
+    )
+    rewards, utils, delays, losses = [], [], [], []
+    for _ in range(n_episodes):
+        obs = env.reset()
+        done = False
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, info = env.step(action)
+            rewards.append(float(reward))
+            bw = getattr(env, "current_bandwidth", 0)
+            rr = getattr(env, "receiving_rate", 0) / 1000
+            if bw > 0.00001:
+                utils.append(min(rr / bw, 1.5))
+            delays.append(float(getattr(env, "delay", 0.0)))
+            losses.append(float(getattr(env, "loss_ratio", 0.0)))
+    env.close()
+    return dict(
+        trace=trace_path,
+        mean_reward=float(np.mean(rewards)) if rewards else None,
+        mean_bandwidth_util=float(np.mean(utils)) if utils else None,
+        mean_delay_ms=float(np.mean(delays)) if delays else None,
+        mean_loss_ratio=float(np.mean(losses)) if losses else None,
+        n_steps=len(rewards),
+    )
+
+
+def run_evaluation(model, mode, trace, trace_set, n_episodes=3):
+    """--mode pertrace ならそのtrace1本、--mode global なら9trace全部について
+    それぞれ evaluate_on_trace() を実行し、結果のリストを返す(globalモデルが
+    trace別にどれくらい汎化できているかが分かる)。
+    """
+    if mode == "pertrace":
+        targets = [trace]
+    else:
+        targets = trace_set or DEFAULT_TRACE_SET
+    results = []
+    for t in targets:
+        print(f"[sb3_recoco_reproduction] 評価中: {t} ({n_episodes}エピソード)...")
+        r = evaluate_on_trace(model, t, n_episodes=n_episodes)
+        print(f"  -> mean_reward={r['mean_reward']:.4f}  "
+              f"util={r['mean_bandwidth_util']:.3f}  "
+              f"delay={r['mean_delay_ms']:.1f}ms  "
+              f"loss={r['mean_loss_ratio']:.4f}")
+        results.append(r)
+    return results
+
+
+def save_eval_csv(results, output_path):
+    base, _ = os.path.splitext(output_path)
+    csv_path = f"{base}_eval.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(results[0].keys()))
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"[sb3_recoco_reproduction] 評価結果を保存しました: {csv_path}")
+    return csv_path
+
+
 def build_model(agent_type, env, tuned, seed, device, tensorboard_log):
     if agent_type == "SAC":
         from stable_baselines3 import SAC
@@ -231,26 +312,48 @@ def main():
                     help="'cuda' / 'cpu' / 'auto'(自動判定、デフォルト)")
     p.add_argument("--output", type=str, required=True,
                     help="保存先(.zip、SB3標準形式)")
-    p.add_argument("--tensorboard-log", type=str, default=None,
-                    help="指定すると学習曲線をtensorboardログとして保存")
+    p.add_argument("--tensorboard-log", type=str, default="./tb_logs",
+                    help="学習曲線のtensorboardログ保存先ディレクトリ"
+                         "(デフォルト./tb_logs。'tensorboard --logdir tb_logs'"
+                         "で途中経過をブラウザから見られる。無効化するには"
+                         "空文字 '' を指定)")
+    p.add_argument("--eval-episodes", type=int, default=3,
+                    help="学習後の評価に使うエピソード数(0で評価をスキップ)")
     args = p.parse_args()
 
     out_dir = os.path.dirname(args.output)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    tb_log = args.tensorboard_log if args.tensorboard_log else None
+
     env = build_env(args.mode, args.trace, args.trace_set)
     model = build_model(args.agent_type, env, args.tuned, args.seed,
-                         args.device, args.tensorboard_log)
+                         args.device, tb_log)
 
     label = args.trace if args.mode == "pertrace" else "GLOBAL(9trace random)"
+    run_name = f"{args.agent_type}_{args.mode}_{os.path.splitext(os.path.basename(args.output))[0]}"
     print(f"[sb3_recoco_reproduction] agent={args.agent_type} mode={args.mode} "
           f"target={label} tuned={args.tuned} total_timesteps={args.total_timesteps} "
           f"device={args.device}")
+    if tb_log:
+        print(f"[sb3_recoco_reproduction] tensorboardログ: {tb_log}/{run_name}_1 "
+              f"(別ターミナルで 'tensorboard --logdir {tb_log} --host 0.0.0.0' "
+              f"を実行すると学習曲線をブラウザで確認できます)")
 
-    model.learn(total_timesteps=args.total_timesteps, progress_bar=False)
+    model.learn(total_timesteps=args.total_timesteps, progress_bar=False,
+                tb_log_name=run_name)
     model.save(args.output)
     print(f"[sb3_recoco_reproduction] 保存しました: {args.output}")
+
+    if args.eval_episodes > 0:
+        print(f"[sb3_recoco_reproduction] 学習後の評価を実行します"
+              f"(trace毎に{args.eval_episodes}エピソード)...")
+        results = run_evaluation(model, args.mode, args.trace, args.trace_set,
+                                  n_episodes=args.eval_episodes)
+        save_eval_csv(results, args.output)
+        overall_mean = float(np.mean([r["mean_reward"] for r in results if r["mean_reward"] is not None]))
+        print(f"[sb3_recoco_reproduction] 全trace平均reward: {overall_mean:.4f}")
 
 
 if __name__ == "__main__":
