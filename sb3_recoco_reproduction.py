@@ -216,6 +216,27 @@ def evaluate_on_trace(model, trace_path, n_episodes=3):
             delays.append(float(getattr(env, "delay", 0.0)))
             losses.append(float(getattr(env, "loss_ratio", 0.0)))
     env.close()
+
+    # --- 論文(denama/ReCoCo, IEEE HPSR 2023)のQoE指標(式7-10)。
+    # 上で集めたutils/delays/lossesの生配列からそのまま計算する。
+    # QoE_delayはmean値だけでは出せない(95パーセンタイルが必要)ため、
+    # このためにevaluate_on_trace自体を書き直す必要はなく、
+    # 元々ここで集めていた生配列を使うだけで済む。
+    qoe_rr = qoe_delay_ = qoe_loss_ = overall_qoe = None
+    if utils and delays and losses:
+        u = np.clip(np.array(utils), None, 1.0)
+        qoe_rr = 100.0 * float(np.median(u))
+
+        d = np.array(delays)
+        d_max, d_min = float(d.max()), float(d.min())
+        d95 = float(np.percentile(d, 95))
+        qoe_delay_ = 100.0 if d_max == d_min else 100.0 * (d_max - d95) / (d_max - d_min)
+
+        l = np.array(losses)
+        qoe_loss_ = 100.0 * (1.0 - float(l.mean()))
+
+        overall_qoe = 0.33 * qoe_rr + 0.33 * qoe_delay_ + 0.33 * qoe_loss_
+
     return dict(
         trace=trace_path,
         mean_reward=float(np.mean(rewards)) if rewards else None,
@@ -223,6 +244,10 @@ def evaluate_on_trace(model, trace_path, n_episodes=3):
         mean_delay_ms=float(np.mean(delays)) if delays else None,
         mean_loss_ratio=float(np.mean(losses)) if losses else None,
         n_steps=len(rewards),
+        qoe_receiving_rate=qoe_rr,
+        qoe_delay=qoe_delay_,
+        qoe_loss=qoe_loss_,
+        overall_qoe=overall_qoe,
     )
 
 
