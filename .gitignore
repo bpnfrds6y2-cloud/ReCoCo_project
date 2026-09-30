@@ -1,0 +1,6 @@
+sb3_models/
+tb_logs/
+training_log.txt
+__pycache__/
+*.pyc
+.DS_Store

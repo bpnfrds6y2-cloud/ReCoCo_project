@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/trace_300k.json,0.4724083072189,0.7820987818383167,126.34195538680588,0.0,903

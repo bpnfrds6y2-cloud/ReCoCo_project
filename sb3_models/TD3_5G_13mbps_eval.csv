@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/5G_13mbps.json,-0.17778412227395235,0.5066812138860118,188.69517409800673,0.09896633245138893,912

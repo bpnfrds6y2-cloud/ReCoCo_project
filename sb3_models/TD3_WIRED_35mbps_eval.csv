@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/WIRED_35mbps.json,-0.014584951290538238,0.344934263622695,113.08084040105344,0.01788974011132515,921

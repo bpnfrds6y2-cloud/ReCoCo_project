@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/4G_3mbps.json,-0.34440883039384607,0.04430355205060012,105.01968765024638,0.13303644741246384,915

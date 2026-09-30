@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/WIRED_900kbps.json,0.49940999428392496,0.8814329152318744,122.70346216397054,0.0,867

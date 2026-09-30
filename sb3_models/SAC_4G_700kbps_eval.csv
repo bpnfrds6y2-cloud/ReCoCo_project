@@ -1,2 +1,0 @@
-trace,mean_reward,mean_bandwidth_util,mean_delay_ms,mean_loss_ratio,n_steps
-./traces/4G_700kbps.json,0.15945691341310114,0.49551145984686823,118.32256345615288,0.0,1602
